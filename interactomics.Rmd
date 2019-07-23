@@ -1,0 +1,244 @@
+---
+title: 'Integrative analysis: Methylation Data (450K)  and RNA-seq'
+author: "Ruth Barral Arca"
+date: "30 de mayo de 2019"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+## Introduction
+
+Colorectal cancer is cancer that originates in the colon or rectum. These cancers can also be called colon cancer or rectal cancer (rectal) depending on where they originate. Colon cancer and rectal cancer are often grouped because they have many common characteristics.
+
+The treatment of rectal cancer is largely based on the stage (extent) of the cancer, although other factors may also be important.People with rectal cancers that have not spread to distant sites are usually treated with surgery. Radiation therapy and chemotherapy may also be given before or after surgery.
+
+Stage I rectal cancers have grown in the deeper layers of the rectum wall, but they have not spread outside of the rectum itself. Whereas Stage IV rectal cancers have spread to distant organs and tissues, such as the liver or lungs. The treatment options for stage IV disease depend to some degree on how widespread the cancer is.
+
+In this project we wish to study the genes responsible of rectal cancer progression comparing the methylation and transcriptomic  patterns of patients in stage I versus patients in stage IV following an integrative approach.
+
+## Objetive
+
+We will follow a holistic approach integrating transcriptomic and Epigenomic data to study samples from The Cancer Genome Atlas Rectum Adenocarcinoma (TCGA-READ), in order to asses which genes associated to tumor progression have both their methylation and transcriptional status alterated
+
+##Prepare the datasets
+
+### Download data from TGCA
+Set the enviroment
+```{r,message=F}
+setwd("/home/ruth/Dropbox/TFM_RUTH/third_approach")
+library(RTCGAToolbox)
+library(Biobase)
+library(limma)
+library(MetKMR)
+library(IlluminaHumanMethylation450kanno.ilmn12.hg19)
+```
+
+We will use  the R package RTCGAToolbox to download the files from the FIREHOSE repository
+```{r ,message=F}
+
+readData = getFirehoseData (dataset="READ", runDate="20150402",forceDownload = TRUE,
+                            Clinic=TRUE, Methylation=TRUE, RNASeq2GeneNorm=TRUE)
+save(readData,file="/home/ruth/Dropbox/TFM_RUTH/third_approach/readData.rda")
+```
+
+### Get the clinical data
+
+```{r}
+clin = getData(readData, "clinical")
+names(clin)
+clin$t_stage = factor(substr(clin$pathology_T_stage,1,2))
+table(clin$t_stage)
+```
+
+### Get the expression data (Normalized RNA-seq counts)
+
+```{r}
+rnaseq = getData(readData, "RNASeq2GeneNorm")
+rnaseq[1:4,1:4]
+
+#Patient identifiers transformation
+rid = tolower(substr(colnames(rnaseq),1,12))
+rid = gsub("-", ".", rid)
+mean(rid %in% rownames(clin))
+colnames(rnaseq) = rid
+which(duplicated(colnames(rnaseq)))
+rnaseq = rnaseq[,-which(duplicated(colnames(rnaseq)))]
+
+
+readES = ExpressionSet(log2(rnaseq+1))
+pData(readES) = clin[sampleNames(readES),]
+readES
+clin$pathology_T_stage
+
+#There are patients with NA tumor stage therefore we need to eliminate those patients.
+readES$t_stage
+readES = readES[,!is.na(readES$t_stage)]
+
+ #check that all the samples have an associated tumor stage
+table(is.na(readES$t_stage))
+```
+
+## Diferential expression analysis:
+
+```{r}
+
+design<-model.matrix(~0+t_stage,data=pData(readES))
+head(design)
+fit<-lmFit(readES,design)
+contrast.matrix<-makeContrasts(t_staget1-t_staget4,levels=design)
+fit2<-contrasts.fit(fit,contrast.matrix)
+fite<-eBayes(fit2)
+top.table<-topTable(fite,coef=1,number=Inf,adjust="BH")
+results<-decideTests(fite)
+table(results) 
+
+results.p0.05<-top.table[top.table$adj.P.Val<0.05,]
+dim(results.p0.05)
+
+results.p0.05[1:5,]
+```
+
+
+## Interactomic analysis
+
+### Preparation of methylation data
+
+We selected methylation data from de platform Infinium Human Methylation 450K BeadChip.
+This data needs to be trated to: 1) transform identifiers to match the ones used in the transcriptomic dataset & clinical data 2) remove duplicates
+```{r}
+me450k = getData(readData, "Methylation", 2)
+fanno = me450k[,1:3]
+me450k = data.matrix(me450k[,-c(1:3)])
+med = tolower(substr(colnames(me450k),1,12))
+med = gsub("-", ".", med)
+mean(med %in% rownames(clin))
+
+
+sum(duplicated(med))
+
+
+todrop = which(duplicated(med))
+me450k = me450k[,-todrop]
+med = med[-todrop]
+colnames(me450k) = med
+ok = intersect(rownames(clin), colnames(me450k))
+me450kES = ExpressionSet(me450k[,ok])
+pData(me450kES) = clin[ok,]
+fData(me450kES) = fanno
+me450kES = me450kES[,-which(is.na(me450kES$t_stage))]
+```
+
+### Keep only common samples to transcriptomic and epigenomic data
+
+```{r}
+ok = intersect(sampleNames(me450kES), sampleNames(readES))
+meMatch = me450kES[,ok]
+esMatch = readES[,ok]
+
+esMatch$t_stage==meMatch$t_stage
+
+meMatch = meMatch[,meMatch$t_stage=="t1" |meMatch$t_stage=="t4"]
+esMatch = esMatch[,esMatch$t_stage=="t1" |esMatch$t_stage=="t4"]
+
+colnames(meMatch)==colnames(esMatch)
+
+```
+
+### Get the Infinium Human Methylation 450K BeadChip annotation
+
+```{r}
+
+ann450k<-getAnnotation(IlluminaHumanMethylation450kanno.ilmn12.hg19)
+head(ann450k)
+ann450k <-ann450k [grep("TSS1500|TSS200|5'UTR|1stExon|Body",ann450k$UCSC_RefGene_Group),]
+betas<-rownames(meMatch)
+table( betas %in% rownames(ann450k))
+meMatch<-meMatch[betas %in% rownames(ann450k),]
+
+annotation2 <- data.frame(row = 1:length(ann450k$UCSC_RefGene_Name),
+                          pos = ann450k$pos,
+                          site=rownames(ann450k),
+                          chr=ann450k$chr,
+                          gene = ann450k$UCSC_RefGene_Name,
+                          stringsAsFactors = F)
+
+#kept only the genes differentially expressed in the expression matrix
+DE_genes<-rownames(results.p0.05)
+expr<-exprs(esMatch[DE_genes,])
+
+#remove NAs from methylation data
+me.data<-as.data.frame(na.omit(exprs(meMatch)))
+me.data[1:3,1:3]
+
+```
+
+
+### MetKMR analysis
+
+We will perform an MetKMR analysis grouping the positions according to the gene they belong (thefore the window size and gap parameter will be ignored).
+
+```{r}
+
+ID<-NULL
+pvalue<-NULL
+
+for (i in 1:length(DE_genes)){ 
+  print(paste("Completed %",round(100*i/length(rownames(expr)),2)))
+  gene<-DE_genes[i]
+  annotation <- annotation2[!is.na(annotation2$gene),]
+  annotation <-annotation [grep(gene,annotation$gene),]
+  annotation<-annotation[annotation$site %in% rownames(me.data),]
+  any (annotation$site %in% rownames(me.data))
+  if (any (annotation$site %in% rownames(me.data))){
+    
+ 
+  analysis2 <- new("MetRKAT",
+                   data =data.matrix(na.omit(exprs(meMatch)) ),
+                   annotation =annotation,
+                   distmethod = c("euclidean"),
+                   wsize = 10, gap = 0,
+                   max.na = 0.3,
+                   wmethod = 'genes')
+  
+  analysis2@intervals <- createIntervals(analysis2)
+  #remember to set the output time to C "CONTINUOUS" as our output
+  #variable will be the RNA-seq counts
+  analysis2@results <- applyRKAT(analysis2, y = expr[gene,], out_type = 'C')
+  
+  if (any(analysis2@results$pval < 0.05)) { 
+    filtered_results <- analysis2@results[analysis2@results$pval <= 0.05, ]
+    intervalnames<-analysis2@annotation[filtered_results$first_row, 'gene']
+    ID<-c(ID,intervalnames)
+    pvalue<-c(pvalue,filtered_results$pval)
+    result<-cbind(ID,pvalue)
+    print(result)
+  }else {
+    print (paste(c(DE_genes[i], "is not significant")))
+  } }else {next}
+}
+
+result<-as.data.frame(result)
+
+
+#remove possible  grep pattern matching errors
+x<-0
+for (i in 1:length(result[,1])) {
+  print(strsplit(as.character(result[,1]),";")[i])
+  EVAL=any(unlist(strsplit(as.character(result[,1]),";")[i]) %in% DE_genes)
+  if (EVAL==TRUE){ x<-c(x,i)}
+}
+
+#Final results genes associated to rectum adenocarcioma progression
+#whose methylation and expression status are altered
+result_filtered<-result[x,]
+result_filtered
+```
+
+
+## References
+
+* "Working with TCGA data: clinical, expression, mutation and methylation
+Introduction" https://genomicsclass.github.io/book/pages/tcga.html
+* "MiRKAT: Microbiome Regression-Based Kernel Association Test" https://cran.r-project.org/web/packages/MiRKAT/index.html
+* American Cancer Society https://www.cancer.org/es/cancer/cancer-de-colon-o-recto/tratamiento/por-etapas-recto.html

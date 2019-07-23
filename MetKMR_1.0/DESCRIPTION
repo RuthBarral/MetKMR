@@ -1,0 +1,16 @@
+Package: MetKMR
+Type: Package
+Title: Detection of Differentially Methylated Regions Through a Kernel
+        Regression Sliding-window Approach
+Version: 1.0
+Author: Carlos Mart<c3><ad>nez and Ruth Barral Arca
+Maintainer: Ruth Barral Arca <barralarcaruth@gmail.com>
+Description: differential methylation data analysis method that implements Kernel regression. Uses a sliding window approach in order to increase the flexibility
+License: GPL-3
+LazyData: TRUE
+Imports: methods, qqman, tidyr, IdeoViz, IlluminaHumanMethylation450kanno.ilmn12.hg19, vegan, MiRKAT, Hmisc, dplyr, DBI, GenomicRanges, IRanges, RColorBrewer
+Suggests: testthat
+Collate: 'AllClass.R' 'AllGeneric.R' 'MetKMR.R' 'zzz.R'
+RoxygenNote: 5.0.1
+NeedsCompilation: no
+Packaged: 2016-11-01 16:18:33 UTC; cornelius

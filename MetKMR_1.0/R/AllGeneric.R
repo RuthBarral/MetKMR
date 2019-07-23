@@ -1,0 +1,6 @@
+setGeneric("applyRKAT", function(object, overwrite = FALSE, ...) standardGeneric("applyRKAT"))
+setGeneric("createIntervals", function(object, overwrite = FALSE) standardGeneric("createIntervals"))
+setGeneric("plotManhattan", function(object, pvals) standardGeneric("plotManhattan"))
+setGeneric("plotChromosome", function(object, chrom, pvals, cutoff = 0.05, logp = TRUE, hg_ideo = NULL, ...) standardGeneric("plotChromosome"))
+setGeneric("plotWindows", function(object, chrom, pvals, cutoff = 0.05, startpos = 0, endpos = Inf, logp = TRUE) standardGeneric("plotWindows"))
+setGeneric("toSQLite", function(object, dbname = NULL, overwrite = FALSE) standardGeneric("toSQLite"))

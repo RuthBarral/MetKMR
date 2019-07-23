@@ -1,0 +1,125 @@
+---
+title: ' Differential methylation analysis using MetKMR'
+author: "Ruth Barral Arca , Msc in Omic Data Analysis"
+date: "24 April 2019"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+
+Here we will use data of Hungtinton disease (HD) patients and controls fibroblast cells from the study (GSE67733):
+*Jia H, Morris CD, Williams RM, Loring JF et al. HDAC inhibition imparts beneficial transgenerational effects in Huntington's disease mice via altered DNA and histone methylation. Proc Natl Acad Sci U S A 2015 Jan 6;112(1):E56-64. PMID: 25535382*
+
+Here we will study  methilation patterns of patients with Hungtion Disease focusing on the chromosome 4 where the gen responsible of the disease HTT is located using kernel regression . 
+
+In this example the outcome variable it's dicotomous : healthy control (normal) vs Hungtinton (HD). But please note that MetKMR also allow the user to study continuous outcomes such as the weight or the  gene expression level
+
+```{r ,message=FALSE}
+#set the enviroment
+library(minfi)
+library(MetKMR)
+library(IlluminaHumanMethylation450kanno.ilmn12.hg19)
+library(doParallel)
+library(rtracklayer)
+library(biomaRt)
+library(dbplyr)
+registerDoParallel(cores = 4)
+setwd("/home/ruth/Dropbox/TFM_RUTH/first_approach")
+
+#load the data
+phenoData<-c("normal","HD","normal","HD","normal","HD", "normal","HD","normal","HD")
+load("betas.rda")
+load("annotation2.rda")
+#the annotation MUST have this format
+head(annotation2)
+
+```
+
+# MetKMR
+Assessment of DNA methylation changes in human fibroblasts from normal controls and patients with Huntington's disease (HD) 
+
+
+For illustrating purpouses we choose a window size of 9 and the wmethod default , so we will test only a reduced number of windows and therefore this tutorial script will run fast in the majority of laptops.
+
+For example another interesting option, but more computationally demanding, would be to use the wmethod "location_fixed" and choose wsize of roughly 1000bp and a gap of 500 . As  1089 bp  has been described as the average lenght of human CpG islands by *"Han, L., Su, B., Li, W. H., & Zhao, Z. (2008). CpG island density and its correlations with genomic features in mammalian genomes. Genome biology, 9(5), R79."*
+
+We encourage the user to "play" with the different windows options.
+
+##DMRs Stimation
+
+```{r,message=FALSE}
+analysis <- new("MetRKAT",
+                data = betas,
+                annotation = annotation2,
+                distmethod =  c("euclidean"),
+                wsize = 9, gap = 0,
+                max.na = 0.3,wmethod = "default")
+analysis <- toSQLite(analysis, "hungtinton.sqlite")
+analysis@intervals <- createIntervals(analysis)
+
+y<-replace(phenoData,phenoData=="HD",1)
+y<-replace(y,phenoData=="normal",0)
+analysis@results <- applyRKAT(analysis, y = y)
+
+
+results_df <- as.data.frame(analysis@results)
+head(results_df)
+```
+
+
+We keep only those DMRs(differentially methilated regions) that are statistically significant and that are located within the Chromosome 4 (where the HTT is located)
+
+```{r}
+#we are interested in chr4 because hungtine gene
+results_df <- results_df[results_df$chr == 'chr4', ]
+filtered_results <- results_df[results_df$pval<= 0.05, ]
+head(filtered_results)
+
+```
+
+##Plots
+
+####First we will have a look at all the chromosomes using a Manhattan Plot
+```{r,,message=FALSE}
+plotManhattan(analysis, pvals ='euclidean')
+```
+
+
+###Then we will focus on  Chromosome 4 plotting an ideogram
+```{r}
+plotChromosome(analysis, chrom = 'chr4', pvals = 'euclidean',cutoff = 0.05)
+```
+
+###Finally we will focus on the  HTT gene in Chromosome 4 and plot its kernel windows
+
+```{r}
+plotWindows(analysis, chrom = 'chr4', pvals = 'euclidean',cutoff = 0.05,
+            startpos = 3041422,endpos = 3243960)
+```
+ 
+We take all the significant windows and convert them into genes using Biomart
+```{r}
+# Map positions to genes
+analysis@annotation<-as.data.frame(analysis@annotation)
+DMG_symbol<-analysis@annotation[filtered_results$first_row, 'gene']
+```
+
+##Final results
+
+We select those DMRs within  the HTT gene between the all the differentially expressed DMRs
+```{r}
+#Hungtin
+annotated_result<-filtered_results
+annotated_result$gene<-DMG_symbol
+head(annotated_result)
+HTT<-annotated_result[grep("HTT",annotated_result$gene),];HTT
+HTT
+```
+
+>Result: 
+We observed differentially methylation patterns of the DMRs within the HTT gene between cases and controls.
+Which suggest that despite of being a mendelian dominant disease the methylation modifications also play a rol in hungtinton disease.
+
+
+

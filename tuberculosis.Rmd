@@ -1,0 +1,149 @@
+
+---
+title: "How to analyze EPIC microarray data with MetRKAT"
+author: "Ruth Barral Arca"
+date: "28 de junio de 2019"
+output: pdf_document
+---
+
+#Set the enviroment
+
+```{r,message=F}
+library(minfi)
+library(MetRKAT)
+setwd("/home/ruth/Descargas/GSE107917_RAW")
+library(doParallel)
+library(dbplyr)
+detectCores()
+registerDoParallel(cores = 8) #this analysis was also run smoothly with 4 cores 
+```
+
+#Prepare the data
+ [Click here to download](https://www.ncbi.nlm.nih.gov/geo/download/?acc=GSE107917&format=file) the raw data and uncompress it 
+Create the Targets.csv file e.g.:
+
+| Sample_Name   | Sample_Well | Sample_Plate | Sample_Group | Array  | Basename      |
+|---------------|-------------|--------------|--------------|--------|---------------|
+| GSM2883348_G1 | A02         | Test_Plate   | disease      | R01C01 | GSM2883348_G1 |
+| GSM2883350_G2 | B02         | Test_Plate   | disease      | R02C01 | GSM2883350_G2 |
+| GSM2883353_G3 | C02         | Test_Plate   | normal       | R03C01 | GSM2883353_G3 |
+| GSM2883351_G4 | D02         | Test_Plate   | normal       | R04C01 | GSM2883351_G4 |
+| GSM2883352_G5 | E02         | Test_Plate   | disease      | R05C01 | GSM2883352_G5 |
+| GSM2883349_G6 | F02         | Test_Plate   | normal       | R06C01 | GSM2883349_G6 |
+
+#load the data
+```{r,message=F}
+idat.folder <- "/home/ruth/Descargas/GSE107917_RAW"
+targets <- read.metharray.sheet(base=idat.folder)
+targets$Basename<-targets$Sample_Name
+###loading data
+rgset <- read.metharray.exp(targets = targets)
+#save(rgset,file="rgset.rda" )
+#load("rgset.rda")
+phenoData <- rgset$Sample_Group
+```
+
+#Preprocess and normalize the data
+The RGChannelSet stores also a manifest object that contains the probe design information of the array:
+```{r, message=F}
+manifest <- getManifest(rgset)
+```
+A MethylSet objects contains only the methylated and unmethylated signals
+```{r, message=F}
+MSet <- preprocessRaw(rgset) 
+```
+A RatioSet object is a class designed to store Beta values and/or M values instead of the methylated and unmethylated signals. 
+An optional copy number matrix, CN, the sum of the methylated and unmethylated signals, can be also stored. 
+Mapping a MethylSet to a RatioSet may be irreversible, i.e. one cannot be guranteed to retrieve the methylated and unmethylated signals from a RatioSet.
+A RatioSet can be created with the function ratioConvert:
+```{r, message=F}
+RSet <- ratioConvert(MSet, what = "both", keepCN = TRUE)
+```
+The functions getBeta, getM and getCN return respectively the Beta value matrix, M value matrix and the Copy Number matrix.
+```{r, message=F}
+beta <- getBeta(RSet)
+M <- getM(MSet)
+```
+The function mapToGenome applied to a RatioSet object will add genomic coordinates to each probe together with some additional annotation information.
+The output object is a GenomicRatioSet (class holding M or/and Beta values together with associated genomic coordinates). 
+It is possible to merge the manifest object with the genomic locations by setting the option mergeManifest to TRUE.
+```{r, message=F}
+GRset <- mapToGenome(RSet)
+beta <- getBeta(GRset)
+M <- getM(GRset)
+CN <- getCN(GRset)
+sampleNames <- sampleNames(GRset)
+probeNames <- featureNames(GRset)
+gr <- granges(GRset)
+head(gr, n= 3)
+```
+Annotation
+```{r, message=F}
+annotation <- getAnnotation(GRset)
+#names(annotation)
+###Normalization
+gRatioSet.quantile <- preprocessQuantile(rgset)##SQN
+#####anotation
+annEPIC<-getAnnotation(IlluminaHumanMethylationEPICanno.ilm10b4.hg19)
+#head(annEPIC)
+```
+Remove probes with SNPs at CpG or SBE site
+```{r, message=F}
+gRatioSet.quantile<- dropLociWithSnps(gRatioSet.quantile)
+betas<-getBeta(gRatioSet.quantile)
+M <- getM(gRatioSet.quantile)
+```
+ We will pay attention only of CpGs that are in promoter and gene body
+
+```{r, message=F}
+annEPIC <-annEPIC [grep("TSS1500|TSS200|5'UTR|1stExon|Body",annEPIC$UCSC_RefGene_Group),]
+betas<-betas[rownames(betas) %in% rownames(annEPIC) ,]
+annEPIC <-annEPIC[rownames(betas) %in% rownames(annEPIC) ,]
+annotation2 <- data.frame(row = 1:length(annEPIC$UCSC_RefGene_Name),
+                          pos = annEPIC$pos,
+                          site=rownames(annEPIC),
+                          chr=annEPIC$chr,
+                          gene = annEPIC$UCSC_RefGene_Name,
+                          stringsAsFactors = F)
+```
+
+#MetRKAT Differentially Methylated Region Analysis
+```{r}
+analysis <- new("MetRKAT",
+                data = betas,
+                annotation = annotation2,
+                distmethod =  c("euclidean"),
+                wsize = 9, gap = 0, #adding a gap increasses the time needed
+                max.na = 0.3,wmethod = "default")
+analysis <- toSQLite(analysis, "tuberculosis.sqlite")
+analysis@intervals <- createIntervals(analysis)
+y<-replace(phenoData,phenoData=="disease",1)
+y<-replace(y,phenoData=="normal",0)
+analysis@results <- applyRKAT(analysis, y = y)
+```
+
+#Results
+```{r}
+results_df <- as.data.frame(analysis@results)
+#we are interested in the significant results
+filtered_results <- results_df[results_df$pval<= 0.05, ]
+#other them by pval
+filtered_results <- filtered_results [order(filtered_results$pval), ]
+head(filtered_results)
+dim(filtered_results)
+```
+
+#Plots
+Manhattan plot
+```{r,message=F}
+plotManhattan(analysis, pvals ='euclidean')
+```
+Chromosome Ideogram
+```{r,message=F}
+library(rtracklayer)
+plotChromosome(analysis, chrom = 'chr7', pvals = 'euclidean',cutoff = 0.05)
+```
+Windows plot
+```{r,message=F}
+plotWindows(analysis, chrom = 'chr7', pvals = 'euclidean')
+```
